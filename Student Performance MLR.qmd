@@ -1,0 +1,425 @@
+---
+title: "student_performance-mlr"
+format: html
+editor: visual
+---
+
+### Load Libraries & Data 
+
+```{r}
+# Load Packages 
+library(tidyverse)
+library(GGally)
+library(broom)
+library(janitor)
+library(cowplot)
+library(corrplot)
+library(caret)
+library(leaps)
+```
+
+```{r}
+# read data set 
+data <- read_csv("Student_Performance.csv", col_names = T)
+```
+
+```{r}
+# view top 5 rows to check that our data imported correctly
+head(data, 5)
+```
+
+### Data Checks
+
+-   Data Type
+
+-   Missing Values
+
+-   Number of Unique Values
+
+-   Summary Statistics
+
+```{r}
+# Check data types
+glimpse(data)
+```
+
+From this output we can see that we have six total columns. There are five numerical columns and one character column. For future use, let's make the name of these columns simpler using the `janitor` package and change the `extracurricular_activities` column to a factor data type.
+
+```{r}
+# clean names
+data <- data %>% 
+  janitor::clean_names()
+
+# convert extracurricular_activities to factor 
+data <- data %>% 
+  mutate(
+    extracurricular_activities = as.factor(extracurricular_activities)
+  )
+```
+
+```{r}
+# Missing data 
+sum(is.na(data))
+```
+
+We don't have any missing values in this data so we can proceed!
+
+```{r}
+# Unique Values 
+sapply(data, function(x) length(unique(x)))
+```
+
+This output tells us the unique number of values within each column. Since `extracurricular_activities` is a character variable with two levels, we will create a dummy variable for our analysis.
+
+```{r}
+# Summary Statistics 
+summary(data)
+```
+
+#### Insights from summary: 
+
+-   The average score of our response variable `performance_index` is **55.22**
+
+-   The average study time for students in this data set is roughly 5 hours (**4.99**)
+
+### Exploratory Data Analysis 
+
+*What is the distribution of students doing `extracurricular_activities`?*
+
+```{r}
+# Create bar chart of extracirricular_activities
+data %>% 
+  ggplot(aes(x=extracurricular_activities))+
+  geom_bar()+
+  labs(
+    title = "Distribution of Students with Extracirricular Activities"
+  )
+```
+
+There looks to be about a 50/50 split between students **with** and **without** an extra cirricular activity.
+
+*What is the distribution of our numerical variables?*
+
+```{r}
+# Create function that plots data
+my_plots <- lapply(names(data), function(var_x) {
+  p <- 
+    ggplot(data)+
+    aes_string(var_x)
+  
+  if(is.numeric(data[[var_x]])) {
+    p <- p + geom_density()
+  
+  } else {
+    p <- p +geom_bar()
+  } 
+})
+
+# use plot_grid() function from cowplot package
+plot_grid(plotlist = my_plots)
+```
+
+### Work with Outliers
+
+```{r}
+# hours_studied
+data %>% 
+  ggplot(aes(x=hours_studied))+
+  geom_boxplot()
+```
+
+```{r}
+# previous_scores 
+data %>% 
+  ggplot(aes(x=previous_scores))+
+  geom_boxplot()
+```
+
+```{r}
+# sleep_hours
+data %>% 
+  ggplot(aes(x=sleep_hours))+
+  geom_boxplot()
+```
+
+```{r}
+# sample_question_papers_practiced 
+data %>% 
+  ggplot(aes(x=sample_question_papers_practiced))+
+  geom_boxplot()
+```
+
+These boxplots show us that there aren't any outliers in our data!
+
+### IV vs DV Scatterplots 
+
+```{r}
+# hours_studied 
+data %>% 
+  ggplot(aes(x=hours_studied, y=performance_index))+
+  geom_point()+
+  labs(
+    title = "Hours Studied vs Performance Index"
+  )
+```
+
+```{r}
+# previous_scores 
+data %>% 
+  ggplot(aes(x=previous_scores, y=performance_index))+
+  geom_point()+
+   labs(
+    title = "Previous Scores vs Performance Index"
+  )
+```
+
+```{r}
+# sleep_hours 
+data %>% 
+  ggplot(aes(x=sleep_hours, y=performance_index))+
+  geom_point()+
+   labs(
+    title = "Sleep Hours vs Performance Index"
+  )
+```
+
+```{r}
+# sample_question_papers_practiced 
+data %>% 
+  ggplot(aes(x=sample_question_papers_practiced, y=performance_index))+
+  geom_point()+
+   labs(
+    title = "Sample Question Papers Practiced vs Performance Index"
+  )
+```
+
+These **Independent Variable** vs **Dependent Variable** scatterplots give us a good idea of the linear relationship (if any) between our independent and dependent variables.
+
+### Correlation Matrix 
+
+```{r}
+# Create color palette 
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+
+# Create correlation matrix object (you cannot create plot without)
+dcor <- data %>% 
+  select(where(is.numeric)) %>% 
+  cor()
+
+# plot the correlation matrix we just created in the object dcor
+corrplot(dcor, method = "shade", shade.col = NA, tl.col = "black",
+         tl.srt = 45, col = col(200), addCoef.col = "black", order = "AOE")
+```
+
+This correlation matrix confirms what we saw in the **IV** vs **DV** Scatterplots. That there is strong correlation between `previous_scores` and `performance_index`. Also, there is a small positive correlation between `hours_studied` and `performance_index`. From the correlation matrix, we can also see that none of our independent variables are correlated with each other. If this was the case, there may have been some *multicollinearity* in our model.
+
+### Data Preprocessing 
+
+```{r}
+# Create dummy variable for the extracirricular_activities column
+data <- data %>% 
+  mutate(
+    extracurricular_activities = ifelse(extracurricular_activities == "Yes", 1, 0)
+  )
+```
+
+```{r}
+# Split Data into Test / Train subsets 
+smp_size <- floor(0.75 * nrow(data))
+
+# set seed to make partition reproducible 
+set.seed(123)
+train_ind <- sample(seq_len(nrow(data)), size = smp_size)
+
+# Create test and train objects
+train <- data[train_ind, ]
+test <- data[-train_ind, ]
+```
+
+### Creating Model 
+
+In creating this model, we will be using *Mixed Selection*, otherwise known as *Stepwise Regression*. This is a form of variable selection that is used throughout the Machine Learning Community. It is a combination of *forward* and *backward* selection. You can learn more about these strategies [here](https://quantifyinghealth.com/stepwise-selection/).
+
+#### Null Model 
+
+```{r}
+# Create null model 
+null_model <- lm(performance_index ~ 1, data = train)
+
+# Return null model 
+summary(null_model)
+```
+
+Using the strategies of *Mixed Selection* we now add the variable that provides the best fit, `previous_scores`.
+
+#### Step 1 Model
+
+```{r}
+# model step1
+step1_model <- lm(performance_index ~ previous_scores, data = train)
+
+# summary 
+summary(step1_model)
+```
+
+From our `step1_model` output, we can see that the `previous_scores` variable is statistically significant with a p-value \< 0.05. Also, the model has a solid Adjusted $R^2$ value of 83%. Let's add the next variable to our model.
+
+#### Step 2 Model 
+
+```{r}
+# model step2
+step2_model <- lm(performance_index ~ previous_scores + hours_studied, data = data)
+
+# summary 
+summary(step2_model)
+```
+
+In our `step2_model`, we see a significant increase in our Adjusted $R^2$ value from our `step1_model` going from 83% -\> 98%. Also, our residual standard error was reduced from 7.73 -\> 2.28. Both of these changes indicate that our `step2_model` will perform better than the `step1_model`. Let's move on to adding the other variables.
+
+#### Step 3 Model 
+
+```{r}
+# attach data 
+attach(data)
+
+# model step3
+step3_model <- lm(performance_index ~ previous_scores + hours_studied + sleep_hours, data = train)
+
+# summary 
+summary(step3_model)
+```
+
+Although this model shows `sleep_hours` as statistically significant, we should not buy into this much since the adjusted $R^2$ and $RSE$ did not rise/fall significant. Another way of testing to see if the variable you added to the model at a certain step in this process is to create a simple linear regression model using only the variable in question.
+
+```{r}
+# linear model performance_index ~ sleep_hours
+simple_model <- lm(performance_index ~ sleep_hours, data = train)
+
+# summary 
+summary(simple_model)
+```
+
+Once again, just because our `sleep_hours` has a statistically significant *p-value*, the $RSE$ and $R^2$ values aren't good. Therefore, we will leave this variable out of the final model.
+
+#### Mixed Selection Automation using `leaps`
+
+For this example, we have a small amount of predictor variables which allows us to iterate through each one as we've been doing. But let's say we are faced with a larger data set that has hundreds of predictor variables. If we want to use this same *Mixed Selection* technique, we can utilize a function in R to get to our optimal model, faster.
+
+```{r}
+# Set seed for reproducibility 
+set.seed(123)
+
+# Set up repeated k-fold cross-validation 
+train.control <- trainControl(method = "cv", number = 10)
+
+# Train the model 
+step_model <- train(performance_index ~., data = train,
+                    method = "leapSeq",
+                    tuneGrid = data.frame(nvmax = 1:3),
+                    trControl = train.control)
+
+# return results 
+step_model$results
+```
+
+Utilizing the `leaps` package, we can find the three best models from our data with one predictor variable, two predictor variables, and three predictor variables. You can learn more about this package and its overall capabilities [here](http://www.sthda.com/english/articles/37-model-selection-essentials-in-r/154-stepwise-regression-essentials-in-r/).
+
+If we want to see a further breakdown of how this process works, we can run this code
+
+```{r}
+# return summary of final_model
+summary(step_model$finalModel)
+
+# create final_model for future use 
+final_model <- lm(performance_index ~ previous_scores + hours_studied + sleep_hours, data = train)
+```
+
+You can read this output by following the `*` and reading across the column. For example, the `previous_scores` predictor was the only one used in the model with one variable. This leaves us with our best model with three predictors which uses `previous_scores`, `hours_studied`, and `sleep_hours` as the dependent variables.
+
+### Assessing Model Accuracy 
+
+After running a regression model, it is important to check if the model works well for the data. We can do this in many different ways, but one of the quickest ways is to create diagnostic plots for your model.
+
+```{r}
+# create plot layout
+par(mfrow=c(2,2))
+
+# create diagnostic plots
+plot(final_model)
+```
+
+#### Residuals vs Fitted
+
+This plot shows if our residuals have non-linear patterns. If you find equally spread residuals around a horizontal line without distinct patterns, like we display here, it is a good indication that there aren't any non-linear relationships between your residuals.
+
+#### Normal Q-Q
+
+This plot shows if our residuals are normally distributed. Do residuals follow a straight line well or do they deviate severely? As our plot shows, the residuals are lined well on the straight dashed line.
+
+#### Scale-Location 
+
+This plot shows if residuals are spread equally along the ranges of predictors. This is how we can check the assumption of equal variance (homoscedasticity). It's good if you see a horizontal line with equally (randomly) spread points, as shown here.
+
+#### Residuals vs Leverage 
+
+This plot helps us to find influential cases if there are any. In other words, we are looking for any outlying values at the upper right corner or lower right corner of our plot. When cases are outside of the dashed lines (meaning they have high "Cook's distance" scores), the cases are influential to the regression results.
+
+### Making Predictions 
+
+Now that we've created our best three variable model from our data, we can make predictions using our `test` data set.
+
+```{r}
+# make predictions using predict() and the test data set.
+p <- predict(final_model, data = test)
+
+# view predictions 
+p
+
+# since we are making predictions on the train data set, we can 
+# add our new object p directly to the train data set for comparison
+train_predictions <- train %>% 
+  mutate(
+    predictions = p
+  )
+```
+
+#### Residual Plot 
+
+```{r}
+# create residual column
+residual_plot <- train_predictions %>% 
+  mutate(
+    residuals = performance_index - predictions
+  ) %>% 
+  ggplot(aes(x=predictions, y=residuals))+
+  geom_point(shape = 21)+
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red")
+
+residual_plot
+```
+
+This plot displays our residuals vs actual values. It is important to see that these are normally distributed without any distinct non-linear relationship displaying.
+
+#### Example Prediction
+
+As a hypothetical example, let's say I was a student who scored `80` on my last test, studied `4` hours, and got `8` hours of sleep.
+
+*What would be my estimated `performance_index`*?
+
+To further understand how our model will base this prediction, we can use this equation:
+
+$$
+\text{performance_index} = B_0 (-32.91) + \text{previous_scores} *1.02 + \text{hours_studied}*2.86 + \text{sleep_hours}*0.48
+$$
+
+Inputting our own values into this equation, we can return the model's predicted `performance_index`.
+
+$$
+\text{performance_index} = B_0 (-32.91) + (80)*1.02 + (4)*2.86 + (8)*0.48
+$$
+
+Running this equation through a calculator, we get an predicted `performance_index` of 63.97.
+
+### Conclusion
+
+This was a super basic introduction to Multiple Linear Regression as I am still learning the concept myself. If you happened to come across this, I hope you learned something too. Each day provides an opportunity..
